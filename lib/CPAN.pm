@@ -1363,29 +1363,68 @@ sub set_perl5lib {
     my @dirs = map {("$_/blib/arch", "$_/blib/lib")} $self->_list_sorted_descending_is_tested;
     return if !@dirs;
 
-    if (@dirs < 12) {
-        $CPAN::Frontend->optprint('perl5lib', "Prepending @dirs to PERL5LIB for '$for'\n");
-        $ENV{PERL5LIB} = join $Config::Config{path_sep}, @dirs, @env;
-    } elsif (@dirs < 24 ) {
-        my @d = map {my $cp = $_;
-                     $cp =~ s/^\Q$CPAN::Config->{build_dir}\E/%BUILDDIR%/;
-                     $cp
-                 } @dirs;
-        $CPAN::Frontend->optprint('perl5lib', "Prepending @d to PERL5LIB; ".
-                                 "%BUILDDIR%=$CPAN::Config->{build_dir} ".
-                                 "for '$for'\n"
-                                );
-        $ENV{PERL5LIB} = join $Config::Config{path_sep}, @dirs, @env;
-    } else {
-        my $cnt = keys %{$self->{is_tested}};
-        $CPAN::Frontend->optprint('perl5lib', "Prepending blib/arch and blib/lib of ".
-                                 "$cnt build dirs to PERL5LIB; ".
-                                 "for '$for'\n"
-                                );
-        $ENV{PERL5LIB} = join $Config::Config{path_sep}, @dirs, @env;
-    }
+    ( my $msg, @dirs ) = _prep_perl5lib_dirs( @dirs );
+    $CPAN::Frontend->optprint('perl5lib', "Prepending $msg for '$for'\n");
+    
+    $ENV{PERL5LIB} = join $Config::Config{path_sep}, @dirs, @env;
 }}
 
+sub _prep_perl5lib_dirs {
+    my ( @dirs ) = @_;
+    
+    return _merge_tested_dirs( @dirs ) if eval{ require File::Copy::Recursive };
+    
+    return ( _perl5lib_msg( @dirs ), @dirs );
+}
+
+sub _merge_tested_dirs {
+    my ( @dirs ) = @_;
+    
+    $CPAN::META->{cachemgr} ||= CPAN::CacheMgr->new();
+    my $build_merge_dir = $CPAN::META->{cachemgr}->dir.'/build_merge';
+    
+    _make_empty_dir( $build_merge_dir );
+    
+    File::Copy::Recursive::dircopy( $_, $build_merge_dir ) for @dirs;
+    
+    my $msg = "$build_merge_dir (containing copies of arch and blib of ". ( @dirs / 2 ) ." build dirs) to PERL5LIB;";
+    
+    return ( $msg, $build_merge_dir );
+}
+
+sub _perl5lib_msg {
+    my ( @dirs ) = @_;
+    
+    return "blib/arch and blib/lib of ". ( @dirs / 2 ) ." build dirs to PERL5LIB;" if @dirs >= 24;
+    
+    return "@dirs to PERL5LIB" if @dirs < 12;
+    
+    my @d = map {
+        my $cp = $_;
+        $cp =~ s/^\Q$CPAN::Config->{build_dir}\E/%BUILDDIR%/;
+        $cp
+    } @dirs;
+    
+    return "@d to PERL5LIB; %BUILDDIR%=$CPAN::Config->{build_dir}";
+}
+
+sub _make_empty_dir {
+    my ( $dir ) = @_;
+    
+    File::Path::rmtree( $dir );
+    
+    return if mkdir $dir, 0755;
+    
+    $CPAN::Frontend->unrecoverable_error(<<EOF);
+Couldn't mkdir '$dir': $!
+
+Cannot continue: Please find the reason why I cannot make the
+directory
+$dir
+and fix the problem, then retry.
+
+EOF
+}
 
 1;
 
